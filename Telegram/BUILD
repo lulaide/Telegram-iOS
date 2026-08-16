@@ -52,6 +52,9 @@ load(
     "telegram_team_id",
     "telegram_enable_icloud",
     "telegram_enable_siri",
+    "telegram_custom_server_url",
+    "telegram_custom_server_datacenter_id",
+    "telegram_custom_server_public_key_base64",
 )
 
 load("@build_bazel_rules_apple//apple:resources.bzl",
@@ -646,8 +649,17 @@ plist_fragment(
     <string>MtProtoKit</string>
     <key>CFBundlePackageType</key>
     <string>FMWK</string>
+    <key>TGCustomServerURL</key>
+    <string>{telegram_custom_server_url}</string>
+    <key>TGCustomServerDatacenterId</key>
+    <integer>{telegram_custom_server_datacenter_id}</integer>
+    <key>TGCustomServerPublicKeyBase64</key>
+    <string>{telegram_custom_server_public_key_base64}</string>
     """.format(
         telegram_bundle_id = telegram_bundle_id,
+        telegram_custom_server_url = telegram_custom_server_url,
+        telegram_custom_server_datacenter_id = telegram_custom_server_datacenter_id,
+        telegram_custom_server_public_key_base64 = telegram_custom_server_public_key_base64,
     )
 )
 
@@ -1577,6 +1589,12 @@ plist_fragment(
     <string>APPL</string>
     <key>CFBundleSignature</key>
     <string>????</string>
+    <key>TGCustomServerURL</key>
+    <string>{telegram_custom_server_url}</string>
+    <key>TGCustomServerDatacenterId</key>
+    <integer>{telegram_custom_server_datacenter_id}</integer>
+    <key>TGCustomServerPublicKeyBase64</key>
+    <string>{telegram_custom_server_public_key_base64}</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>LSApplicationQueriesSchemes</key>
@@ -1730,6 +1748,9 @@ plist_fragment(
     <true/>
     """.format(
         telegram_bundle_id = telegram_bundle_id,
+        telegram_custom_server_url = telegram_custom_server_url,
+        telegram_custom_server_datacenter_id = telegram_custom_server_datacenter_id,
+        telegram_custom_server_public_key_base64 = telegram_custom_server_public_key_base64,
     )
 )
 

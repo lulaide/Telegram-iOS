@@ -1,4 +1,5 @@
 #import "MTDiscoverConnectionSignals.h"
+#import <MtProtoKit/MTCustomServerConfiguration.h>
 
 #import "MTTcpConnection.h"
 #import <MtProtoKit/MTTransportScheme.h>
@@ -197,7 +198,7 @@
             }];
             [bestTcp4Signals addObject:signal];
             
-            NSArray *alternatePorts = @[@80, @5222];
+            NSArray *alternatePorts = MTCustomServerIsEnabled() ? @[@5222] : @[@80, @5222];
             for (NSNumber *nPort in alternatePorts) {
                 NSSet *ipsWithPort = tcpIpsByPort[nPort];
                 if (![ipsWithPort containsObject:address.ip]) {

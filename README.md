@@ -45,6 +45,12 @@ python3 build-system/Make/Make.py \
 
 # Advanced Compilation Guide
 
+## Custom MTProto server and LiveContainer IPA
+
+This fork supports build-time custom MTProto endpoints and includes a manual
+GitHub Actions workflow that produces an unsigned IPA. See
+[docs/custom-server.md](docs/custom-server.md).
+
 ## Xcode
 
 1. Copy and edit `build-system/appstore-configuration.json`.

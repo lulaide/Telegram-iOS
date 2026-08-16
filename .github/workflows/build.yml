@@ -1,109 +1,164 @@
-name: CI
+name: Build LiveContainer IPA
 
 on:
-  push:
-    branches: [ master ]
-
   workflow_dispatch:
+    inputs:
+      server_url:
+        description: Custom MTProto endpoint (tcp://host:port)
+        required: true
+        default: tcp://43.155.11.190:10443
+        type: string
+      datacenter_id:
+        description: MTProto datacenter id
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: livecontainer-ipa-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: macos-13
+    name: Build unsigned arm64 IPA
+    runs-on: macos-26
+    timeout-minutes: 360
+
+    env:
+      BAZEL_USER_ROOT: /private/var/tmp/_bazel_containerhost
+      CANONICAL_SOURCE_DIR: /Users/Shared/telegram-ios
+      CUSTOM_SERVER_URL: ${{ inputs.server_url }}
+      CUSTOM_SERVER_DATACENTER_ID: ${{ inputs.datacenter_id }}
+      CUSTOM_SERVER_PUBLIC_KEY_BASE64: ${{ secrets.CUSTOM_SERVER_PUBLIC_KEY_BASE64 }}
 
     steps:
-      - uses: actions/checkout@v2
+      - name: Check out source and submodules
+        uses: actions/checkout@v6
         with:
-          submodules: 'recursive'
-          fetch-depth: '0'
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set active Xcode path
+      - name: Select repository Xcode version
+        shell: bash
         run: |
-          XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
-          sudo xcode-select -s /Applications/Xcode_$XCODE_VERSION.app/Contents/Developer
+          set -euo pipefail
+          XCODE_VERSION="$(python3 -c 'import json; print(json.load(open("versions.json"))["xcode"])')"
+          XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          test -d "$XCODE_PATH"
+          sudo xcode-select --switch "$XCODE_PATH"
+          xcodebuild -version
+
+      - name: Configure custom MTProto server
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          source = Path("build-system/teamgram-configuration.json")
+          destination = Path("build-system/ci-teamgram-configuration.json")
+          configuration = json.loads(source.read_text(encoding="utf-8"))
+          configuration["custom_server_url"] = os.environ["CUSTOM_SERVER_URL"]
+          configuration["custom_server_datacenter_id"] = int(os.environ["CUSTOM_SERVER_DATACENTER_ID"])
+
+          public_key_base64 = os.environ.get("CUSTOM_SERVER_PUBLIC_KEY_BASE64", "").strip()
+          if public_key_base64:
+              configuration["custom_server_public_key"] = base64.b64decode(
+                  public_key_base64,
+                  validate=True,
+              ).decode("utf-8")
+
+          destination.write_text(
+              json.dumps(configuration, indent=4, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "build-system/Make")
+          from BuildConfiguration import build_configuration_from_json
+
+          build_configuration_from_json("build-system/ci-teamgram-configuration.json")
+          PY
 
       - name: Create canonical source directory
+        shell: bash
         run: |
-          set -x
+          set -euo pipefail
           sudo mkdir -p /Users/Shared
-          cp -R $GITHUB_WORKSPACE /Users/Shared/
-          mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
+          sudo rm -rf "$CANONICAL_SOURCE_DIR"
+          sudo ditto "$GITHUB_WORKSPACE" "$CANONICAL_SOURCE_DIR"
+          sudo chown -R "$(id -u):$(id -g)" "$CANONICAL_SOURCE_DIR"
 
-      - name: Build the App
+      - name: Build device IPA with fake signing material
+        shell: bash
         run: |
-          set -x
-
-          # source code paths are included in the final binary, so we need to make them stable across builds
-          SOURCE_DIR=/Users/Shared/telegram-ios
-
-          # use canonical bazel root
-          BAZEL_USER_ROOT="/private/var/tmp/_bazel_containerhost"
-
-          cd $SOURCE_DIR
+          set -euo pipefail
+          cd "$CANONICAL_SOURCE_DIR"
 
           BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
+          APP_VERSION="$(python3 -c 'import json; print(json.load(open("versions.json"))["app"])')"
+          COMMIT_COUNT="$(git rev-list --count HEAD)"
+          BUILD_NUMBER="$((COMMIT_COUNT + BUILD_NUMBER_OFFSET))"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
 
-          export APP_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["app"]);')
-          export COMMIT_COUNT=$(git rev-list --count HEAD)
-          export COMMIT_COUNT="$(($COMMIT_COUNT+$BUILD_NUMBER_OFFSET))"
-          export BUILD_NUMBER="$COMMIT_COUNT"
-          echo "BUILD_NUMBER=$(echo $BUILD_NUMBER)" >> $GITHUB_ENV
-          echo "APP_VERSION=$(echo $APP_VERSION)" >> $GITHUB_ENV
-
-          python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
+          python3 build-system/Make/ImportCertificates.py \
+            --path build-system/fake-codesigning/certs
           python3 -u build-system/Make/Make.py \
             --bazelUserRoot="$BAZEL_USER_ROOT" \
             build \
-            --configurationPath="build-system/appstore-configuration.json" \
+            --configurationPath=build-system/ci-teamgram-configuration.json \
             --codesigningInformationPath=build-system/fake-codesigning \
             --configuration=release_arm64 \
             --buildNumber="$BUILD_NUMBER"
 
-          # collect ipa
-          OUTPUT_PATH="build/artifacts"
-          rm -rf "$OUTPUT_PATH"
-          mkdir -p "$OUTPUT_PATH"
-          for f in bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/Telegram.ipa; do
-            cp "$f" $OUTPUT_PATH/
-          done
+      - name: Remove signatures and package IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CANONICAL_SOURCE_DIR"
 
-          # collect dsym
-          mkdir -p build/DSYMs
-          for f in bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/*.dSYM; do
-            cp -R "$f" build/DSYMs/
-          done
-          zip -r "./$OUTPUT_PATH/Telegram.DSYMs.zip" build/DSYMs 1>/dev/null
+          SIGNED_IPA="$(find bazel-out -path '*/bin/Telegram/Telegram.ipa' -type f -print -quit)"
+          test -n "$SIGNED_IPA"
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE_DIR="$RUNNER_TEMP/telegram-unsigned"
+          OUTPUT_DIR="$CANONICAL_SOURCE_DIR/build/artifacts"
+          OUTPUT_IPA="$OUTPUT_DIR/Telegram-Teamgram-LiveContainer-unsigned.ipa"
+          rm -rf "$PACKAGE_DIR" "$OUTPUT_DIR"
+          mkdir -p "$PACKAGE_DIR" "$OUTPUT_DIR"
+          ditto -x -k "$SIGNED_IPA" "$PACKAGE_DIR"
+
+          find "$PACKAGE_DIR" -type d -name _CodeSignature -prune -exec rm -rf {} +
+          find "$PACKAGE_DIR" -type f -name embedded.mobileprovision -delete
+
+          while IFS= read -r binary; do
+            if file "$binary" | grep -q 'Mach-O'; then
+              codesign --remove-signature "$binary" 2>/dev/null || true
+            fi
+          done < <(find "$PACKAGE_DIR/Payload" -type f)
+
+          (
+            cd "$PACKAGE_DIR"
+            /usr/bin/zip -qry "$OUTPUT_IPA" .
+          )
+
+          unzip -tq "$OUTPUT_IPA"
+          test -n "$(find "$PACKAGE_DIR/Payload" -maxdepth 2 -name Info.plist -print -quit)"
+          ls -lh "$OUTPUT_IPA"
+
+      - name: Upload LiveContainer IPA
+        uses: actions/upload-artifact@v7
         with:
-          tag_name: build-${{ env.BUILD_NUMBER }}
-          release_name: Telegram ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
-          body: |
-            An unsigned build of Telegram for iOS ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
-          draft: false
-          prerelease: false
-
-      - name: Upload Release IPA
-        id: upload-release-ipa 
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: /Users/Shared/telegram-ios/build/artifacts/Telegram.ipa
-          asset_name: Telegram.ipa
-          asset_content_type: application/zip
-
-      - name: Upload Release DSYM
-        id: upload-release-dsym 
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: /Users/Shared/telegram-ios/build/artifacts/Telegram.DSYMs.zip
-          asset_name: Telegram.DSYMs.zip
-          asset_content_type: application/zip
+          name: Telegram-Teamgram-${{ env.APP_VERSION }}-${{ env.BUILD_NUMBER }}
+          path: /Users/Shared/telegram-ios/build/artifacts/Telegram-Teamgram-LiveContainer-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14

@@ -6,6 +6,7 @@
 #import <MtProtoKit/MTBackupAddressSignals.h>
 #import <MtProtoKit/MTBag.h>
 #import <MtProtoKit/MTContext.h>
+#import <MtProtoKit/MTCustomServerConfiguration.h>
 #import <MtProtoKit/MTDatacenterAddress.h>
 #import <MtProtoKit/MTDatacenterAddressListData.h>
 #import <MtProtoKit/MTDatacenterAddressSet.h>

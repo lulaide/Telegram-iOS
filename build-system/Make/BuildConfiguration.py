@@ -4,6 +4,8 @@ import sys
 import shutil
 import tempfile
 import plistlib
+import base64
+import urllib.parse
 
 from BuildEnvironment import run_executable_with_output, check_run_system
 from DecryptMatch import decrypt_match_data
@@ -21,7 +23,10 @@ class BuildConfiguration:
         app_specific_url_scheme,
         premium_iap_product_id,
         enable_siri,
-        enable_icloud
+        enable_icloud,
+        custom_server_url,
+        custom_server_datacenter_id,
+        custom_server_public_key
     ):
         self.bundle_id = bundle_id
         self.api_id = api_id
@@ -35,6 +40,9 @@ class BuildConfiguration:
         self.premium_iap_product_id = premium_iap_product_id
         self.enable_siri = enable_siri
         self.enable_icloud = enable_icloud
+        self.custom_server_url = custom_server_url
+        self.custom_server_datacenter_id = custom_server_datacenter_id
+        self.custom_server_public_key = custom_server_public_key
 
     def write_to_variables_file(self, bazel_path, use_xcode_managed_codesigning, aps_environment, path):
         string = ''
@@ -54,6 +62,10 @@ class BuildConfiguration:
         string += 'telegram_enable_siri = {}\n'.format(self.enable_siri)
         string += 'telegram_enable_icloud = {}\n'.format(self.enable_icloud)
         string += 'telegram_enable_watch = True\n'
+        string += 'telegram_custom_server_url = {}\n'.format(json.dumps(self.custom_server_url))
+        string += 'telegram_custom_server_datacenter_id = {}\n'.format(self.custom_server_datacenter_id)
+        custom_server_public_key_base64 = base64.b64encode(self.custom_server_public_key.encode('utf-8')).decode('ascii')
+        string += 'telegram_custom_server_public_key_base64 = {}\n'.format(json.dumps(custom_server_public_key_base64))
 
         if os.path.exists(path):
             os.remove(path)
@@ -84,6 +96,33 @@ def build_configuration_from_json(path):
         for key in required_keys:
             if key not in configuration_dict:
                 print('Configuration at {} does not contain {}'.format(path, key))
+
+        custom_server_url = configuration_dict.get('custom_server_url', '').strip()
+        custom_server_datacenter_id = configuration_dict.get('custom_server_datacenter_id', 1)
+        custom_server_public_key = configuration_dict.get('custom_server_public_key', '').strip()
+
+        if not isinstance(custom_server_datacenter_id, int) or custom_server_datacenter_id <= 0:
+            raise ValueError('custom_server_datacenter_id must be a positive integer')
+
+        if custom_server_url:
+            parsed_custom_server_url = urllib.parse.urlparse(custom_server_url)
+            if parsed_custom_server_url.scheme not in ('tcp', 'mtproto'):
+                raise ValueError('custom_server_url must use the tcp:// or mtproto:// scheme')
+            if not parsed_custom_server_url.hostname:
+                raise ValueError('custom_server_url must include a host')
+            try:
+                custom_server_port = parsed_custom_server_url.port
+            except ValueError as error:
+                raise ValueError('custom_server_url contains an invalid port') from error
+            if custom_server_port is None or custom_server_port <= 0 or custom_server_port > 65535:
+                raise ValueError('custom_server_url must include a port between 1 and 65535')
+            if parsed_custom_server_url.username is not None or parsed_custom_server_url.password is not None:
+                raise ValueError('custom_server_url must not include credentials')
+            if parsed_custom_server_url.path not in ('', '/') or parsed_custom_server_url.params or parsed_custom_server_url.query or parsed_custom_server_url.fragment:
+                raise ValueError('custom_server_url must contain only a scheme, host, and port')
+            if '-----BEGIN RSA PUBLIC KEY-----' not in custom_server_public_key or '-----END RSA PUBLIC KEY-----' not in custom_server_public_key:
+                raise ValueError('custom_server_public_key must contain a PEM encoded RSA public key')
+
         return BuildConfiguration(
             bundle_id=configuration_dict['bundle_id'],
             api_id=configuration_dict['api_id'],
@@ -96,7 +135,10 @@ def build_configuration_from_json(path):
             app_specific_url_scheme=configuration_dict['app_specific_url_scheme'],
             premium_iap_product_id=configuration_dict['premium_iap_product_id'],
             enable_siri=configuration_dict['enable_siri'],
-            enable_icloud=configuration_dict['enable_icloud']
+            enable_icloud=configuration_dict['enable_icloud'],
+            custom_server_url=custom_server_url,
+            custom_server_datacenter_id=custom_server_datacenter_id,
+            custom_server_public_key=custom_server_public_key
         )
 
 

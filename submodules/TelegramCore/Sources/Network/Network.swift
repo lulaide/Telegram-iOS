@@ -468,6 +468,9 @@ func initializedNetwork(accountId: AccountRecordId, arguments: NetworkInitializa
         let queue = Queue()
         queue.async {
             let _ = registeredLoggingFunctions
+
+            let customServerEnabled = MTCustomServerIsEnabled()
+            let effectiveDatacenterId = customServerEnabled ? Int(MTCustomServerDatacenterId()) : datacenterId
             
             let serialization = Serialization()
             
@@ -527,13 +530,20 @@ func initializedNetwork(accountId: AccountRecordId, arguments: NetworkInitializa
             }
             
             let seedAddressList: [Int: [String]]
+            let seedAddressPort: UInt16
             
-            if testingEnvironment {
+            if customServerEnabled, let customServerHost = MTCustomServerHost() {
+                seedAddressList = [
+                    effectiveDatacenterId: [customServerHost]
+                ]
+                seedAddressPort = MTCustomServerPort()
+            } else if testingEnvironment {
                 seedAddressList = [
                     1: ["149.154.175.10"],
                     2: ["149.154.167.40"],
                     3: ["149.154.175.117"]
                 ]
+                seedAddressPort = 443
             } else {
                 seedAddressList = [
                     1: ["149.154.175.50", "2001:b28:f23d:f001::a"],
@@ -542,16 +552,17 @@ func initializedNetwork(accountId: AccountRecordId, arguments: NetworkInitializa
                     4: ["149.154.167.91", "2001:67c:4e8:f004::a"],
                     5: ["149.154.171.5", "2001:b28:f23f:f005::a"]
                 ]
+                seedAddressPort = 443
             }
             
             for (id, ips) in seedAddressList {
-                context.setSeedAddressSetForDatacenterWithId(id, seedAddressSet: MTDatacenterAddressSet(addressList: ips.map { MTDatacenterAddress(ip: $0, port: 443, preferForMedia: false, restrictToTcp: false, cdn: false, preferForProxy: false, secret: nil) }))
+                context.setSeedAddressSetForDatacenterWithId(id, seedAddressSet: MTDatacenterAddressSet(addressList: ips.map { MTDatacenterAddress(ip: $0, port: seedAddressPort, preferForMedia: false, restrictToTcp: false, cdn: false, preferForProxy: false, secret: nil) }))
             }
             
             context.keychain = keychain
             var wrappedAdditionalSource: MTSignal?
             #if os(iOS)
-            if #available(iOS 10.0, *), !supplementary, arguments.isICloudEnabled {
+            if #available(iOS 10.0, *), !customServerEnabled, !supplementary, arguments.isICloudEnabled {
                 var cloudDataContextValue: CloudDataContext?
                 if let value = cloudDataContext.with({ $0 }) {
                     cloudDataContextValue = value
@@ -576,7 +587,9 @@ func initializedNetwork(accountId: AccountRecordId, arguments: NetworkInitializa
             #endif
             
             if !supplementary {
-                context.setDiscoverBackupAddressListSignal(MTBackupAddressSignals.fetchBackupIps(testingEnvironment, currentContext: context, additionalSource: wrappedAdditionalSource, phoneNumber: phoneNumber, mainDatacenterId: datacenterId))
+                if !customServerEnabled {
+                    context.setDiscoverBackupAddressListSignal(MTBackupAddressSignals.fetchBackupIps(testingEnvironment, currentContext: context, additionalSource: wrappedAdditionalSource, phoneNumber: phoneNumber, mainDatacenterId: effectiveDatacenterId))
+                }
                 let externalRequestVerificationStream = arguments.externalRequestVerificationStream
                 context.setExternalRequestVerification({ nonce in
                     return MTSignal(generator: { subscriber in
@@ -618,7 +631,7 @@ func initializedNetwork(accountId: AccountRecordId, arguments: NetworkInitializa
             context.beginExplicitBackupAddressDiscovery()
             #endif*/
             
-            let mtProto = MTProto(context: context, datacenterId: datacenterId, usageCalculationInfo: usageCalculationInfo(basePath: basePath, category: nil), requiredAuthToken: nil, authTokenMasterDatacenterId: 0)!
+            let mtProto = MTProto(context: context, datacenterId: effectiveDatacenterId, usageCalculationInfo: usageCalculationInfo(basePath: basePath, category: nil), requiredAuthToken: nil, authTokenMasterDatacenterId: 0)!
             mtProto.useTempAuthKeys = context.useTempAuthKeys
             mtProto.checkForProxyConnectionIssues = true
             
@@ -653,7 +666,7 @@ func initializedNetwork(accountId: AccountRecordId, arguments: NetworkInitializa
                 useExperimentalFeatures = false
             }
             
-            let network = Network(queue: queue, datacenterId: datacenterId, context: context, mtProto: mtProto, requestService: requestService, connectionStatusDelegate: connectionStatusDelegate, _connectionStatus: connectionStatus, basePath: basePath, appDataDisposable: appDataDisposable, encryptionProvider: arguments.encryptionProvider, useRequestTimeoutTimers: useRequestTimeoutTimers, useBetaFeatures: arguments.useBetaFeatures, useExperimentalFeatures: useExperimentalFeatures)
+            let network = Network(queue: queue, datacenterId: effectiveDatacenterId, context: context, mtProto: mtProto, requestService: requestService, connectionStatusDelegate: connectionStatusDelegate, _connectionStatus: connectionStatus, basePath: basePath, appDataDisposable: appDataDisposable, encryptionProvider: arguments.encryptionProvider, useRequestTimeoutTimers: useRequestTimeoutTimers, useBetaFeatures: arguments.useBetaFeatures, useExperimentalFeatures: useExperimentalFeatures)
             
             if let data = appConfiguration.data, let notifyInterval = data["upload_premium_speedup_notify_period"] as? Double {
                 network.updateNetworkSpeedLimitedEventNotifyInterval(value: notifyInterval)

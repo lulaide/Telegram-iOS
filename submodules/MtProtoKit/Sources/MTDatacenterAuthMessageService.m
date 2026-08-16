@@ -1,4 +1,5 @@
 #import <MtProtoKit/MTDatacenterAuthMessageService.h>
+#import <MtProtoKit/MTCustomServerConfiguration.h>
 
 #import <MtProtoKit/MTLogging.h>
 #import <MtProtoKit/MTContext.h>
@@ -178,7 +179,14 @@ typedef enum {
             _stage = MTDatacenterAuthStagePQ;
         }
     } else {
-        _publicKeys = defaultPublicKeys(!mtProto.context.isTestingEnvironment);
+        NSString *customServerPublicKey = MTCustomServerPublicKey();
+        if (MTCustomServerIsEnabled() && customServerPublicKey != nil) {
+            _publicKeys = @[
+                [[MTDatacenterAuthPublicKey alloc] initWithPublicKey:customServerPublicKey]
+            ];
+        } else {
+            _publicKeys = defaultPublicKeys(!mtProto.context.isTestingEnvironment);
+        }
         _stage = MTDatacenterAuthStagePQ;
     }
     
